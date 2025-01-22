@@ -1,0 +1,11 @@
+version: '3.8'
+
+services:
+  bot:
+    build: .
+    container_name: allstar_video_bot
+    volumes:
+      - ./cache:/app/cache  # Для сохранения кэша между перезапусками
+    restart: always  # Автоматический перезапуск при перезагрузке сервера
+    environment:
+      - TZ=Asia/Tashkent  # Установка часового пояса
