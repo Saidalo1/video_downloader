@@ -46,10 +46,26 @@ async def is_allstar_url(url: str) -> Optional[str]:
         parsed_url = urlparse(url)
         if 'allstar.gg' in parsed_url.netloc and 'clip' in parsed_url.path:
             clip_id = parse_qs(parsed_url.query).get('clip', [None])[0]
-            return clip_id
-    except Exception:
-        pass
+            if clip_id:
+                return clip_id
+    except Exception as e:
+        logger.error(f"Ошибка при проверке URL: {e}")
     return None
+
+async def extract_allstar_urls(text: str) -> list[str]:
+    """
+    Извлекает все ссылки на allstar.gg клипы из текста
+    
+    Args:
+        text (str): Текст сообщения
+        
+    Returns:
+        list[str]: Список найденных ссылок
+    """
+    # Регулярное выражение для поиска URL
+    url_pattern = r'https?://(?:www\.)?allstar\.gg/clip\?clip=[a-zA-Z0-9]+'
+    urls = re.findall(url_pattern, text)
+    return urls
 
 async def get_video_url(url: str) -> str:
     """Получает URL видео с помощью Selenium"""
@@ -128,60 +144,72 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик сообщений"""
     message = update.message
     
-    # Проверяем, есть ли в сообщении ссылка на allstar.gg
-    clip_id = await is_allstar_url(message.text)
-    if not clip_id:
+    # Проверяем, что сообщение содержит текст
+    if not message or not message.text:
+        return
+    
+    # Извлекаем все ссылки из сообщения
+    urls = await extract_allstar_urls(message.text)
+    if not urls:
         return
     
     try:
         # Отправляем начальное сообщение
         status_message = await message.reply_text(
-            "🎮 Получена ссылка на клип!\n"
+            f"🎮 Найдено {len(urls)} ссылок на клипы!\n"
             "⏳ Начинаю обработку..."
         )
         
-        # Проверяем кэш
-        if clip_id in video_cache:
-            file_path, _ = video_cache[clip_id]
-            if os.path.exists(file_path):
-                await status_message.edit_text("⚡️ Клип найден в кэше, отправляю...")
-                await message.reply_video(
-                    video=open(file_path, 'rb'),
-                    caption="Видео из кэша ⚡️"
+        # Обрабатываем каждую ссылку
+        for i, url in enumerate(urls, 1):
+            try:
+                clip_id = await is_allstar_url(url)
+                if not clip_id:
+                    continue
+                
+                await status_message.edit_text(
+                    f"🎮 Обработка клипа {i}/{len(urls)}\n"
+                    "⏳ Пожалуйста, подождите..."
                 )
-                await status_message.delete()
-                return
-        
-        # Создаем временный файл для сохранения видео
-        cache_file = os.path.join(CACHE_DIR, f"{clip_id}.mp4")
-        
-        # Получаем URL видео
-        await status_message.edit_text(
-            "🔍 Получаю информацию о видео...\n"
-            "🕒 Это может занять несколько секунд"
-        )
-        video_url = await get_video_url(message.text)
-        
-        # Скачиваем видео
-        await status_message.edit_text(
-            "📥 Скачиваю видео...\n"
-            "⏳ Пожалуйста, подождите"
-        )
-        await message.chat.send_action(ChatAction.UPLOAD_VIDEO)
-        await download_video(video_url, cache_file)
-        
-        # Отправляем видео
-        await status_message.edit_text("📤 Отправляю видео...")
-        await message.reply_video(
-            video=open(cache_file, 'rb'),
-            caption="Вот ваше видео! 🎮"
-        )
+                
+                # Проверяем кэш
+                if clip_id in video_cache:
+                    file_path, _ = video_cache[clip_id]
+                    if os.path.exists(file_path):
+                        await message.reply_video(
+                            video=open(file_path, 'rb'),
+                            caption=f"Видео {i} из кэша ⚡️"
+                        )
+                        continue
+                
+                # Создаем временный файл для сохранения видео
+                cache_file = os.path.join(CACHE_DIR, f"{clip_id}.mp4")
+                
+                # Получаем URL видео
+                video_url = await get_video_url(url)
+                
+                # Скачиваем видео
+                await message.chat.send_action(ChatAction.UPLOAD_VIDEO)
+                await download_video(video_url, cache_file)
+                
+                # Отправляем видео
+                await message.reply_video(
+                    video=open(cache_file, 'rb'),
+                    caption=f"Вот ваше видео {i}! 🎮"
+                )
+                
+                # Сохраняем в кэш
+                video_cache[clip_id] = (cache_file, datetime.now())
+                
+            except Exception as e:
+                logger.error(f"Ошибка при обработке клипа {url}: {e}")
+                await message.reply_text(
+                    f"❌ Ошибка при обработке клипа {i}.\n"
+                    "🔄 Пожалуйста, попробуйте позже или проверьте правильность ссылки."
+                )
         
         # Удаляем статусное сообщение
         await status_message.delete()
-        
-        # Сохраняем в кэш
-        video_cache[clip_id] = (cache_file, datetime.now())
         
         # Очищаем старый кэш
         await clean_old_cache()
@@ -189,8 +217,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Ошибка при обработке сообщения: {e}")
         error_text = (
-            "❌ Извините, произошла ошибка при скачивании видео.\n"
-            "🔄 Пожалуйста, попробуйте позже или проверьте правильность ссылки."
+            "❌ Извините, произошла ошибка при обработке сообщения.\n"
+            "🔄 Пожалуйста, попробуйте позже или проверьте правильность ссылок."
         )
         if 'status_message' in locals():
             await status_message.edit_text(error_text)
@@ -205,10 +233,25 @@ def main():
     # Добавляем обработчики
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
+    # Обрабатываем только текстовые сообщения, исключая команды
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    
+    # Добавляем обработчик ошибок
+    application.add_error_handler(error_handler)
     
     # Запускаем бота
     application.run_polling(allowed_updates=Update.ALL_TYPES)
+
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик ошибок"""
+    logger.error(f"Update {update} caused error: {context.error}")
+    
+    if update and update.effective_message:
+        error_message = (
+            "❌ Произошла ошибка при обработке вашего запроса.\n"
+            "🔄 Пожалуйста, попробуйте позже или проверьте правильность данных."
+        )
+        await update.effective_message.reply_text(error_message)
 
 if __name__ == '__main__':
     main()
