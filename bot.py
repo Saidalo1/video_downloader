@@ -30,6 +30,9 @@ TOKEN = "6031079365:AAGhNXxFXoKGdBo6ufvhzvJiCPEjLk0Twk0"
 # Настройка путей
 CACHE_DIR = "/app/cache"
 
+# Максимальное количество URL в одном сообщении
+MAX_URLS_PER_MESSAGE = 5
+
 # Создаем директорию для кэша если её нет
 os.makedirs(CACHE_DIR, exist_ok=True)
 
@@ -137,7 +140,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Просто отправь мне ссылку на клип с allstar.gg в формате:\n"
         "https://allstar.gg/clip?clip=ID_КЛИПА\n"
-        "И я скачаю его для тебя!"
+        "И я скачаю его для тебя!\n\n"
+        f"⚠️ Максимальное количество ссылок в одном сообщении: {MAX_URLS_PER_MESSAGE}"
     )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -151,6 +155,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Извлекаем все ссылки из сообщения
     urls = await extract_allstar_urls(message.text)
     if not urls:
+        return
+        
+    # Проверяем количество ссылок
+    if len(urls) > MAX_URLS_PER_MESSAGE:
+        await message.reply_text(
+            f"⚠️ Слишком много ссылок в сообщении!\n"
+            f"Максимальное количество: {MAX_URLS_PER_MESSAGE}\n"
+            f"Найдено: {len(urls)}\n"
+            "Пожалуйста, отправьте меньше ссылок."
+        )
         return
     
     try:
